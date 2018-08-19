@@ -30,8 +30,9 @@ class SimpleBot(sc2.BotAI):
         await self.attack()
 
     async def build_workers(self):
-        if len(self.units(PROBE)) < len(self.units(NEXUS)) * 22 and \
-           len(self.units(PROBE)) < self.MAX_WORKERS and self.supply_left >= 1:
+        if self.units(PROBE).amount < self.units(NEXUS).amount * 22 and \
+           self.units(PROBE).amount < self.MAX_WORKERS and \
+           self.supply_left >= 1:
             for nexus in self.units(NEXUS).ready.noqueue:
                 if self.can_afford(PROBE):
                     await self.do(nexus.train(PROBE))
