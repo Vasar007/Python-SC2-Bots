@@ -3,15 +3,20 @@ import random
 import sc2
 from sc2 import run_game, maps, Race, Difficulty
 from sc2.player import Bot, Computer
-from sc2.constants import NEXUS, PROBE, PYLON, ASSIMILATOR, GATEWAY, \
-    CYBERNETICSCORE, STALKER, STARGATE, VOIDRAY
+from sc2.constants import *
 
 
+# 165 iterations per minute.
 class SimpleBot(sc2.BotAI):
 
     def __init__(self):
         self.ITERATIONS_PER_MINUTE = 165
         self.MAX_WORKERS = 66
+        self.MAX_GATEWAYS = 4
+        self.MAX_STARGATES = 3
+        self.MAX_TECH_BUILDS = 2
+        self.MAX_NEXUSES = 4
+        self.MAX_SUPPLY_CAP = 200
 
     async def on_step(self, iteration):
         self.iteration = iteration
@@ -22,11 +27,11 @@ class SimpleBot(sc2.BotAI):
         await self.expand()  # expand to a new resource area.
         await self.offensive_force_buildings()
         await self.build_offensive_force()
-        await self.attack()
+        # await self.attack()
 
     async def build_workers(self):
         if len(self.units(PROBE)) < len(self.units(NEXUS)) * 22 and \
-           len(self.units(PROBE)) < self.MAX_WORKERS:
+           len(self.units(PROBE)) < self.MAX_WORKERS and self.supply_left >= 1:
             for nexus in self.units(NEXUS).ready.noqueue:
                 if self.can_afford(PROBE):
                     await self.do(nexus.train(PROBE))
@@ -35,7 +40,8 @@ class SimpleBot(sc2.BotAI):
         if self.supply_left < 5 and not self.already_pending(PYLON):
             nexuses = self.units(NEXUS).ready
             if nexuses.exists:
-                if self.can_afford(PYLON):
+                if self.can_afford(PYLON) and \
+                   self.supply_cap < self.MAX_SUPPLY_CAP:
                     await self.build(PYLON, near=nexuses.first)
 
     async def build_assimilators(self):
@@ -52,41 +58,70 @@ class SimpleBot(sc2.BotAI):
                     await self.do(worker.build(ASSIMILATOR, vespene))
 
     async def expand(self):
-        if self.units(NEXUS).amount < 3 and self.can_afford(NEXUS):
+        if self.units(NEXUS).amount < self.MAX_NEXUSES and \
+           self.can_afford(NEXUS):
             await self.expand_now()
+
+    async def build_tech_buildings(self, name, pylon):
+        if self.can_afford(name) and \
+           not self.already_pending(name) and \
+           self.units(name).amount <= self.MAX_TECH_BUILDS:
+            await self.build(name, near=pylon)
+
+    async def build_high_tech_buildings(self, pylon):
+        if self.units(CYBERNETICSCORE).ready.exists and \
+           self.units(STARGATE).ready.exists:
+            if not self.units(TWILIGHTCOUNCIL).ready.exists:
+                if self.can_afford(TWILIGHTCOUNCIL) and \
+                   not self.already_pending(TWILIGHTCOUNCIL):
+                    await self.build(TWILIGHTCOUNCIL, near=pylon)
+            else:
+                if not self.units(FLEETBEACON).ready.exists and \
+                   self.can_afford(FLEETBEACON) and \
+                   not self.already_pending(FLEETBEACON):
+                    await self.build(FLEETBEACON, near=pylon)
 
     async def offensive_force_buildings(self):
         print(self.iteration / self.ITERATIONS_PER_MINUTE)
+
+        if self.units(NEXUS).amount < 2:
+            return
+
         if self.units(PYLON).ready.exists:
             pylon = self.units(PYLON).ready.random
 
             if self.units(GATEWAY).ready.exists and \
-               not self.units(CYBERNETICSCORE):
-                if self.can_afford(CYBERNETICSCORE) and \
-                   not self.already_pending(CYBERNETICSCORE):
-                    await self.build(CYBERNETICSCORE, near=pylon)
-            elif len(self.units(GATEWAY)) < (self.iteration /
-                                             self.ITERATIONS_PER_MINUTE / 2):
+               not self.units(CYBERNETICSCORE).exists:
+                await self.build_tech_buildings(CYBERNETICSCORE, pylon)
+            elif self.units(GATEWAY).amount < (self.iteration /
+                                               self.ITERATIONS_PER_MINUTE):
                 if self.can_afford(GATEWAY) and \
                    not self.already_pending(GATEWAY):
-                    await self.build(GATEWAY, near=pylon)
+                    if not self.units(GATEWAY).amount >= self.MAX_GATEWAYS or \
+                       not self.units(WARPGATE).amount:
+                        await self.build(GATEWAY, near=pylon)
+
+            if not self.units(FORGE).exists:
+                await self.build_tech_buildings(FORGE, pylon)
 
             if self.units(CYBERNETICSCORE).ready.exists:
-                if len(self.units(STARGATE)) < (self.iteration /
-                                                self.ITERATIONS_PER_MINUTE /
-                                                2):
+                if self.units(STARGATE).amount < (self.iteration /
+                                                  self.ITERATIONS_PER_MINUTE):
                     if self.can_afford(STARGATE) and \
-                       not self.already_pending(STARGATE):
+                       not self.already_pending(STARGATE) and \
+                       self.units(STARGATE).amount < self.MAX_STARGATES:
                         await self.build(STARGATE, near=pylon)
+
+            await self.build_high_tech_buildings(pylon)
 
     async def build_offensive_force(self):
         for gateway in self.units(GATEWAY).ready.noqueue:
             if not self.units(STALKER).amount > self.units(VOIDRAY).amount:
-                if self.can_afford(STALKER) and self.supply_left > 1:
+                if self.can_afford(STALKER) and self.supply_left >= 2:
                     await self.do(gateway.train(STALKER))
 
         for stargate in self.units(STARGATE).ready.noqueue:
-            if self.can_afford(VOIDRAY) and self.supply_left > 3:
+            if self.can_afford(VOIDRAY) and self.supply_left >= 4:
                 await self.do(stargate.train(VOIDRAY))
 
     def find_target(self, state):
@@ -106,7 +141,7 @@ class SimpleBot(sc2.BotAI):
 
         for UNIT in aggressive_units:
             if self.units(UNIT).amount >= aggressive_units[UNIT][0] and \
-               self.units(UNIT).amount >= aggressive_units:
+               self.units(UNIT).amount >= aggressive_units[UNIT][1]:
                 for unit in self.units(UNIT).idle:
                     await self.do(unit.attack(self.find_target(self.state)))
             elif self.units(UNIT).amount >= aggressive_units[UNIT][1]:
@@ -120,7 +155,7 @@ class SimpleBot(sc2.BotAI):
 def main():
     run_game(maps.get("AbyssalReefLE"), [
              Bot(Race.Protoss, SimpleBot()),
-             Computer(Race.Terran, Difficulty.Easy)
+             Computer(Race.Terran, Difficulty.Hard)
              ], realtime=True)
 
 if __name__ == "__main__":
