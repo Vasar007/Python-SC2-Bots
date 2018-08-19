@@ -5,12 +5,9 @@ from sc2 import run_game, maps, Race, Difficulty
 from sc2.player import Bot, Computer
 from sc2.constants import *
 
-import cv2
-import numpy as np
-
 
 # 165 iterations per minute.
-class CleverBot(sc2.BotAI):
+class SimpleBot(sc2.BotAI):
 
     def __init__(self):
         self.ITERATIONS_PER_MINUTE = 165
@@ -30,20 +27,7 @@ class CleverBot(sc2.BotAI):
         await self.expand()
         await self.offensive_force_buildings()
         await self.build_offensive_force()
-        await self.intel()
         await self.attack()
-
-    async def intel(self):
-        game_data = np.zeros((self.game_info.map_size[1],
-                              self.game_info.map_size[0], 3), np.uint8)
-        for nexus in self.units(NEXUS):
-            nexus_pos = nexus.position
-            cv2.circle(game_data, (int(nexus_pos[0]), int(nexus_pos[1])),
-                       10, (0, 255, 0), -1)
-            flipped = cv2.flip(game_data, 0)
-            resized = cv2.resize(flipped, dsize=None, fx=2, fy=2)
-            cv2.imshow("Intel", resized)
-            cv2.waitKey(1)
 
     async def build_workers(self):
         if self.units(PROBE).amount < self.units(NEXUS).amount * 22 and \
@@ -98,9 +82,8 @@ class CleverBot(sc2.BotAI):
                    not self.already_pending(FLEETBEACON):
                     await self.build(FLEETBEACON, near=pylon)
 
-    async def offensive_force_buildings(self, debug=False):
-        if debug:
-            print(self.iteration / self.ITERATIONS_PER_MINUTE)
+    async def offensive_force_buildings(self):
+        print(self.iteration / self.ITERATIONS_PER_MINUTE)
 
         if self.units(NEXUS).amount < 2:
             return
@@ -111,10 +94,12 @@ class CleverBot(sc2.BotAI):
             if self.units(GATEWAY).ready.exists and \
                not self.units(CYBERNETICSCORE).exists:
                 await self.build_tech_buildings(CYBERNETICSCORE, pylon)
-            elif self.units(GATEWAY).amount < 1:
+            elif self.units(GATEWAY).amount < (self.iteration /
+                                               self.ITERATIONS_PER_MINUTE):
                 if self.can_afford(GATEWAY) and \
                    not self.already_pending(GATEWAY):
-                    if not self.units(GATEWAY).amount >= self.MAX_GATEWAYS or \
+                    if not self.units(GATEWAY).amount >= \
+                        self.MAX_GATEWAYS and \
                        not self.units(WARPGATE).amount >= self.MAX_GATEWAYS:
                         await self.build(GATEWAY, near=pylon)
 
@@ -132,6 +117,11 @@ class CleverBot(sc2.BotAI):
             await self.build_high_tech_buildings(pylon)
 
     async def build_offensive_force(self):
+        for gateway in self.units(GATEWAY).ready.noqueue:
+            if not self.units(STALKER).amount > self.units(VOIDRAY).amount:
+                if self.can_afford(STALKER) and self.supply_left >= 2:
+                    await self.do(gateway.train(STALKER))
+
         for stargate in self.units(STARGATE).ready.noqueue:
             if self.can_afford(VOIDRAY) and self.supply_left >= 4:
                 await self.do(stargate.train(VOIDRAY))
@@ -147,6 +137,7 @@ class CleverBot(sc2.BotAI):
     async def attack(self):
         # {UNIT: [n to fight, n to defend]}
         aggressive_units = {
+            STALKER: [16, 5],
             VOIDRAY: [8, 3]
         }
 
@@ -165,7 +156,7 @@ class CleverBot(sc2.BotAI):
 
 def main():
     run_game(maps.get("AbyssalReefLE"), [
-             Bot(Race.Protoss, CleverBot()),
+             Bot(Race.Protoss, SimpleBot()),
              Computer(Race.Terran, Difficulty.Hard)
              ], realtime=True)
 
