@@ -21,13 +21,13 @@ class SimpleBot(sc2.BotAI):
     async def on_step(self, iteration):
         self.iteration = iteration
         await self.distribute_workers()  # In sc2/bot_ai.py
-        await self.build_workers()  # workers bc obviously
-        await self.build_pylons()  # pylons are protoss supply buildings
-        await self.build_assimilators()  # getting gas
-        await self.expand()  # expand to a new resource area.
+        await self.build_workers()
+        await self.build_pylons()
+        await self.build_assimilators()
+        await self.expand()
         await self.offensive_force_buildings()
         await self.build_offensive_force()
-        # await self.attack()
+        await self.attack()
 
     async def build_workers(self):
         if len(self.units(PROBE)) < len(self.units(NEXUS)) * 22 and \
