@@ -7,6 +7,8 @@ from sc2 import run_game, maps, Race, Difficulty, position, Result
 from sc2.player import Bot, Computer
 from sc2.constants import *
 
+import keras
+
 import cv2
 import numpy as np
 
@@ -18,7 +20,7 @@ HEADLESS = False
 # 165 iterations per minute.
 class CleverBot(sc2.BotAI):
 
-    def __init__(self):
+    def __init__(self, use_model=False, save_train_data=False, debug=False):
         self.ITERATIONS_PER_MINUTE = 165
         self.MAX_WORKERS = 66
         self.MAX_GATEWAYS = 4
@@ -27,19 +29,38 @@ class CleverBot(sc2.BotAI):
         self.MAX_NEXUSES = 4
         self.MAX_SUPPLY_CAP = 200
 
+        self.use_model = use_model
+        self.save_train_data = save_train_data
+        self.debug = debug
+
+        # DICT {UNIT_ID:LOCATION}
+        # Every iteration, make sure that unit id still exists!
+        self.scouts_and_spots = {}
         self.do_something_after = 0
         self.train_data = []
+        if self.use_model:
+            print("USING MODEL!")
+            self.model = keras.models.load_model(
+                "models/BasicCNN-30-epochs-0.0001-LR-4.2"
+            )
 
     def on_end(self, game_result):
-        print('--- on_end called ---')
-        print(game_result)
+        print("--- on_end called ---")
+        print(game_result, self.use_model)
 
-        if game_result == Result.Victory:
-            np.save(f"train_data/{str(int(time.time()))}.npy",
-                    np.array(self.train_data))
+        with open("log.txt", "a") as f:
+            if self.use_model:
+                f.write(f"Model {game_result}\n")
+            else:
+                f.write(f"Random {game_result}\n")
+                if self.save_train_data and game_result == Result.Victory:
+                    np.save(f"train_data/{str(int(time.time()))}.npy",
+                            np.array(self.train_data))
 
     async def on_step(self, iteration):
-        self.iteration = iteration
+        # self.iteration = iteration -> No more used!
+        self.time = (self.state.game_loop / 22.4) / 60
+        await self.build_scout()
         await self.scout()
         await self.distribute_workers()  # In sc2/bot_ai.py
         await self.build_workers()
@@ -51,12 +72,12 @@ class CleverBot(sc2.BotAI):
         await self.intel()
         await self.attack()
 
-    def random_location_variance(self, enemy_start_location):
-        x = enemy_start_location[0]
-        y = enemy_start_location[1]
+    def random_location_variance(self, location):
+        x = location[0]
+        y = location[1]
 
-        x += ((random.randrange(-20, 20)) / 100) * enemy_start_location[0]
-        y += ((random.randrange(-20, 20)) / 100) * enemy_start_location[1]
+        x += random.randrange(-5,5)
+        y += random.randrange(-5,5)
 
         if x < 0:
             x = 0
@@ -71,15 +92,83 @@ class CleverBot(sc2.BotAI):
         return go_to
 
     async def scout(self):
-        if self.units(OBSERVER).amount > 0:
-            scout = self.units(OBSERVER)[0]
-            if scout.is_idle:
-                enemy_location = self.enemy_start_locations[0]
-                move_to = self.random_location_variance(enemy_location)
-                print(move_to)
-                await self.do(scout.move(move_to))
+        # {DISTANCE_TO_ENEMY_START:EXPANSIONLOC}
+        self.expand_dis_dir = {}
+
+        for el in self.expansion_locations:
+            distance_to_enemy_start = el.distance_to(
+                self.enemy_start_locations[0]
+            )
+            if self.debug:
+                print(distance_to_enemy_start)
+            self.expand_dis_dir[distance_to_enemy_start] = el
+
+        self.ordered_exp_distances = sorted(k for k in self.expand_dis_dir)
+
+        existing_ids = [unit.tag for unit in self.units]
+        # Removing of scouts that are actually dead now.
+        to_be_removed = []
+        for noted_scout in self.scouts_and_spots:
+            if noted_scout not in existing_ids:
+                to_be_removed.append(noted_scout)
+
+        for scout in to_be_removed:
+            del self.scouts_and_spots[scout]
+
+        if self.units(ROBOTICSFACILITY).ready.amount == 0:
+            unit_type = PROBE
+            unit_limit = 1
         else:
+            unit_type = OBSERVER
+            unit_limit = 15
+
+        assign_scout = True
+
+        if unit_type == PROBE:
+            for unit in self.units(PROBE):
+                if unit.tag in self.scouts_and_spots:
+                    assign_scout = False
+
+        if assign_scout:
+            if self.units(unit_type).idle.amount > 0:
+                for obs in self.units(unit_type).idle[:unit_limit]:
+                    if obs.tag not in self.scouts_and_spots:
+                        for dist in self.ordered_exp_distances:
+                            try:
+                                location = next(value for key, value in
+                                                self.expand_dis_dir.items()
+                                                if key == dist)
+                                # DICT {UNIT_ID:LOCATION}
+                                active_locations = [self.scouts_and_spots[k]
+                                                    for k in
+                                                    self.scouts_and_spots]
+
+                                if location not in active_locations:
+                                    if unit_type == PROBE:
+                                        for unit in self.units(PROBE):
+                                            if unit.tag in \
+                                               self.scouts_and_spots:
+                                                continue
+
+                                    await self.do(obs.move(location))
+                                    self.scouts_and_spots[obs.tag] = location
+                                    break
+                            except Exception as e:
+                                print(e)
+
+        for obs in self.units(unit_type):
+            if obs.tag in self.scouts_and_spots:
+                if obs in [probe for probe in self.units(PROBE)]:
+                    await self.do(
+                        obs.move(self.random_location_variance(
+                            self.scouts_and_spots[obs.tag])
+                        )
+                    )
+
+    async def build_scout(self):
+        if self.units(OBSERVER).amount < math.floor(self.time / 3):
             for rf in self.units(ROBOTICSFACILITY).ready.noqueue:
+                print(self.units(OBSERVER).amount, self.time / 3)
                 if self.can_afford(OBSERVER) and self.supply_left >= 1:
                     await self.do(rf.train(OBSERVER))
 
@@ -109,7 +198,8 @@ class CleverBot(sc2.BotAI):
                            draw_dict[unit_type][0], draw_dict[unit_type][1],
                            -1)
 
-        main_base_names = ["nexus", "supplydepot", "hatchery"]
+        main_base_names = ["nexus", "commandcenter", "orbitalcommand",
+                           "planetaryfortress", "hatchery"]
         for enemy_building in self.known_enemy_structures:
             pos = enemy_building.position
             if enemy_building.name.lower() not in main_base_names:
@@ -207,10 +297,11 @@ class CleverBot(sc2.BotAI):
                     await self.do(worker.build(ASSIMILATOR, vespene))
 
     async def expand(self):
-        if self.units(NEXUS).amount < (self.iteration /
-                                       self.ITERATIONS_PER_MINUTE) and \
-           self.can_afford(NEXUS):
-            await self.expand_now()
+        try:
+            if self.units(NEXUS).amount < self.time and self.can_afford(NEXUS):
+                await self.expand_now()
+        except Exception as e:
+            print(e)
 
     async def build_tech_buildings(self, name, pylon):
         if self.can_afford(name) and \
@@ -231,9 +322,9 @@ class CleverBot(sc2.BotAI):
                    not self.already_pending(FLEETBEACON):
                     await self.build(FLEETBEACON, near=pylon)
 
-    async def offensive_force_buildings(self, debug=False):
-        if debug:
-            print(self.iteration / self.ITERATIONS_PER_MINUTE)
+    async def offensive_force_buildings(self):
+        if self.debug:
+            print("Time:", time)
 
         if self.units(PYLON).ready.exists:
             pylon = self.units(PYLON).ready.random
@@ -255,8 +346,7 @@ class CleverBot(sc2.BotAI):
                         await self.build(ROBOTICSFACILITY, near=pylon)
 
             if self.units(CYBERNETICSCORE).ready.exists:
-                if self.units(STARGATE).amount < (self.iteration /
-                                                  self.ITERATIONS_PER_MINUTE):
+                if self.units(STARGATE).amount < self.time:
                     if self.can_afford(STARGATE) and \
                        not self.already_pending(STARGATE):
                         await self.build(STARGATE, near=pylon)
@@ -276,13 +366,31 @@ class CleverBot(sc2.BotAI):
 
     async def attack(self):
         if self.units(VOIDRAY).idle.amount > 0:
-            choice = random.randrange(0, 4)
             target = False
-            if self.iteration > self.do_something_after:
+            if self.time > self.do_something_after:
+                if self.use_model:
+                    prediction = self.model.predict(
+                        [self.flipped.reshape([-1, 176, 200, 3])]
+                    )
+                    choice = np.argmax(prediction[0])
+                    print("prediction: ", choice)
+
+                    choice_dict = {
+                        0: "No Attack!",
+                        1: "Attack close to our nexus!",
+                        2: "Attack Enemy Structure!",
+                        3: "Attack Eneemy Start!"
+                    }
+
+                    print(f"Choice #{choice}: {choice_dict[choice]}")
+
+                else:
+                    choice = random.randrange(0, 4)
+
                 if choice == 0:
                     # no_attack
-                    wait = random.randrange(20, 165)
-                    self.do_something_after = self.iteration + wait
+                    wait = random.randrange(7, 100) / 100
+                    self.do_something_after = self.time + wait
                 elif choice == 1:
                     # attack_unit_closest_nexus
                     if self.known_enemy_units.amount > 0:
@@ -308,9 +416,15 @@ class CleverBot(sc2.BotAI):
 
 def main():
     run_game(maps.get("AbyssalReefLE"), [
-             Bot(Race.Protoss, CleverBot()),
-             Computer(Race.Terran, Difficulty.Easy)
+                 Bot(Race.Protoss, CleverBot()),
+                 Computer(Race.Terran, Difficulty.Easy)
              ], realtime=False)
+    for i in range(100):
+        run_game(maps.get("AbyssalReefLE"), [
+                     Bot(Race.Protoss, CleverBot(use_model=True)),
+                     Computer(Race.Protoss, Difficulty.Medium),
+                 ], realtime=False)
+
 
 if __name__ == "__main__":
     main()
