@@ -3,15 +3,14 @@ import os
 import random
 import time
 
+import cv2
+# import keras
+import numpy as np
+
 import sc2
 from sc2 import run_game, maps, Race, Difficulty, position, Result
 from sc2.player import Bot, Computer
 from sc2.constants import *
-
-# import keras
-
-import cv2
-import numpy as np
 
 
 os.environ["SC2PATH"] = "D:/Program Files (x86)/Blizzard Games/StarCraft II"
@@ -76,7 +75,6 @@ class CleverBot(sc2.BotAI):
                     np.save(f"train_data/{str(int(time.time()))}.npy",
                             np.array(self.train_data))
 
-    
     def random_location_variance(self, location):
         x = location[0]
         y = location[1]
@@ -112,7 +110,8 @@ class CleverBot(sc2.BotAI):
         self.time_ = (self.state.game_loop / 22.4) / 60
         if self.debug:
             print("Time:", self.time_)
-        await self.distribute_workers()  # In sc2/bot_ai.py
+        if iteration % 5 == 0:
+            await self.distribute_workers()  # In sc2/bot_ai.py
         await self.scout()
         await self.intel()
         await self.do_something()
@@ -194,105 +193,64 @@ class CleverBot(sc2.BotAI):
         game_data = np.zeros((self.game_info.map_size[1],
                               self.game_info.map_size[0], 3), np.uint8)
 
-        # UNIT: [SIZE, (BGR COLOR)]
-        draw_dict = {
-            NEXUS: [15, (0, 255, 0)],
-            PYLON: [3, (20, 235, 0)],
-            PROBE: [1, (55, 200, 0)],
-            ASSIMILATOR: [2, (55, 200, 0)],
-            GATEWAY: [3, (200, 100, 0)],
-            CYBERNETICSCORE: [3, (150, 150, 0)],
-            STARGATE: [5, (255, 0, 0)],
-            ROBOTICSFACILITY: [5, (215, 155, 0)],
+        for unit in self.units().ready:
+            pos = unit.position
+            cv2.circle(game_data, (int(pos[0]), int(pos[1])),
+                       int(unit.radius * 8), (255, 255, 255),
+                       math.ceil(int(unit.radius * 0.5)))
 
-            # VOIDRAY: [3, (255, 100, 0)],
-            # OBSERVER: [3, (255, 255, 255)],
-        }
+        for unit in self.known_enemy_units:
+            pos = unit.position
+            cv2.circle(game_data, (int(pos[0]), int(pos[1])),
+                       int(unit.radius*8), (125, 125, 125),
+                       math.ceil(int(unit.radius*0.5)))
 
-        for unit_type in draw_dict:
-            for unit in self.units(unit_type).ready:
-                pos = unit.position
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])),
-                           draw_dict[unit_type][0], draw_dict[unit_type][1],
-                           -1)
+        try:
+            line_max = 50
+            mineral_ratio = self.minerals / 1500
+            if mineral_ratio > 1.0:
+                mineral_ratio = 1.0
 
-        main_base_names = ["nexus", "commandcenter", "orbitalcommand",
-                           "planetaryfortress", "hatchery"]
-        for enemy_building in self.known_enemy_structures:
-            pos = enemy_building.position
-            if enemy_building.name.lower() not in main_base_names:
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 5,
-                           (200, 50, 212), -1)
-        for enemy_building in self.known_enemy_structures:
-            pos = enemy_building.position
-            if enemy_building.name.lower() in main_base_names:
-                cv2.circle(game_data, (int(pos[0]), int(pos[1])), 15,
-                           (0, 0, 255), -1)
+            vespene_ratio = self.vespene / 1500
+            if vespene_ratio > 1.0:
+                vespene_ratio = 1.0
 
-        for enemy_unit in self.known_enemy_units:
-            if not enemy_unit.is_structure:
-                worker_names = ["probe", "scv", "drone"]
-                # If that unit is a PROBE, SCV, or DRONE... it's a worker.
-                pos = enemy_unit.position
-                if enemy_unit.name.lower() in worker_names:
-                    cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1,
-                               (55, 0, 155), -1)
-                else:
-                    cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3,
-                               (50, 0, 215), -1)
+            population_ratio = self.supply_left / self.supply_cap
+            if population_ratio > 1.0:
+                population_ratio = 1.0
 
-        for obs in self.units(OBSERVER).ready:
-            pos = obs.position
-            cv2.circle(game_data, (int(pos[0]), int(pos[1])), 1,
-                       (255, 255, 255), -1)
+            plausible_supply = self.supply_cap / 200.0
 
-        for vr in self.units(VOIDRAY).ready:
-            pos = vr.position
-            cv2.circle(game_data, (int(pos[0]), int(pos[1])), 3,
-                       (255, 100, 0), -1)
+            worker_weight = (self.units(PROBE).amount /
+                             (self.supply_cap - self.supply_left))
+            if worker_weight > 1.0:
+                worker_weight = 1.0
 
-        line_max = 50
-        mineral_ratio = self.minerals / 1500
-        if mineral_ratio > 1.0:
-            mineral_ratio = 1.0
+            # Worker/supply ratio.
+            cv2.line(game_data, (0, 19), (int(line_max*worker_weight), 19),
+                     (250, 250, 200), 3)
 
-        vespene_ratio = self.vespene / 1500
-        if vespene_ratio > 1.0:
-            vespene_ratio = 1.0
+            # Plausible supply (supply / 200.0).
+            cv2.line(game_data, (0, 15), (int(line_max*plausible_supply), 15),
+                     (220, 200, 200), 3)
 
-        population_ratio = self.supply_left / self.supply_cap
-        if population_ratio > 1.0:
-            population_ratio = 1.0
+            # Population ratio (supply_left / supply).
+            cv2.line(game_data, (0, 11), (int(line_max*population_ratio), 11),
+                     (150, 150, 150), 3)
 
-        plausible_supply = self.supply_cap / self.MAX_SUPPLY_CAP
+            # Gas / 1500.
+            cv2.line(game_data, (0, 7), (int(line_max*vespene_ratio), 7),
+                     (210, 200, 0), 3)
 
-        military_weight = self.units(VOIDRAY).amount / (self.supply_cap -
-                                                        self.supply_left)
-        if military_weight > 1.0:
-            military_weight = 1.0
-
-        # Worker/supply ratio.
-        cv2.line(game_data, (0, 19), (int(line_max * military_weight), 19),
-                 (250, 250, 200), 3)
-
-        # Plausible supply (supply / self.MAX_SUPPLY_CAP).
-        cv2.line(game_data, (0, 15), (int(line_max * plausible_supply), 15),
-                 (220, 200, 200), 3)
-
-        # Population ratio (supply_left / supply).
-        cv2.line(game_data, (0, 11), (int(line_max * population_ratio), 11),
-                 (150, 150, 150), 3)
-
-        # Gas / 1500.
-        cv2.line(game_data, (0, 7), (int(line_max * vespene_ratio), 7),
-                 (210, 200, 0), 3)
-
-        # Minerals / 1500.
-        cv2.line(game_data, (0, 3), (int(line_max * mineral_ratio), 3),
-                 (0, 255, 25), 3)
+            # Minerals minerals / 1500.
+            cv2.line(game_data, (0, 3), (int(line_max*mineral_ratio), 3),
+                     (0, 255, 25), 3)
+        except Exception as e:
+            print(e)
 
         # Flip horizontally to make our final fix in visual representation:
-        self.flipped = cv2.flip(game_data, 0)
+        grayed = cv2.cvtColor(game_data, cv2.COLOR_BGR2GRAY)
+        self.flipped = cv2.flip(grayed, 0)
 
         if not HEADLESS:
             resized = cv2.resize(self.flipped, dsize=None, fx=2, fy=2)
@@ -307,14 +265,36 @@ class CleverBot(sc2.BotAI):
                 )
                 choice = np.argmax(prediction[0])
             else:
-                choice = random.randrange(0, len(self.choices))
+                worker_weight = 8
+                zealot_weight = 3
+                voidray_weight = 20
+                stalker_weight = 8
+                pylon_weight = 5
+                stargate_weight = 5
+                gateway_weight = 3
+
+                choice_weights = (1 * [0] +
+                                  zealot_weight * [1] +
+                                  gateway_weight * [2] +
+                                  voidray_weight * [3] +
+                                  stalker_weight * [4] +
+                                  worker_weight * [5] +
+                                  1 * [6] +
+                                  stargate_weight * [7] +
+                                  pylon_weight * [8] +
+                                  1 * [9] +
+                                  1 * [10] +
+                                  1 * [11] +
+                                  1 * [12] +
+                                  1 * [13])
+                choice = random.choice(choice_weights)
             try:
                 print(f"Make a choice #{choice}.")
                 await self.choices[choice]()
             except Exception as e:
-                print(e)
+                print(str(e))
 
-            y = np.zeros(len(self.choices))
+            y = np.zeros(14)
             y[choice] = 1
             self.train_data.append([y, self.flipped])
 
