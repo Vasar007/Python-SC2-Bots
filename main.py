@@ -4,10 +4,10 @@ import random
 import time
 
 import cv2
-# import keras
-# import keras.backend.tensorflow_backend as backend
+import keras
+import keras.backend.tensorflow_backend as backend
 import numpy as np
-# import tensorflow as tf
+import tensorflow as tf
 
 import sc2
 from sc2 import run_game, maps, Race, Difficulty, position, Result
@@ -329,7 +329,7 @@ class CleverBot(sc2.BotAI):
                                   1 * [13])
                 choice = random.choice(choice_weights)
             try:
-                print(f"Make a choice #{the_choices[choice]}.")
+                print(f"Make a choice #{self.the_choices[choice]}.")
                 await self.choices[choice]()
             except Exception as e:
                 print(str(e))
