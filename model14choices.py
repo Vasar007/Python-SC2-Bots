@@ -16,6 +16,9 @@ import keras.backend.tensorflow_backend as backend
 import tensorflow as tf
 
 
+EXPANDED_TRAINING_MODEL = True
+
+
 def check_data(choices):
     total_data = 0
 
@@ -68,9 +71,10 @@ def main():
     logdir = f"logs/STAGE2-{int(time.time())}-{learning_rate}"
     tensorboard = TensorBoard(log_dir=logdir)
 
-    train_data_dir = "train_data"
+    train_data_dir = "train_data_14_choices/train_data"
 
-    model = keras.models.load_model("BasicCNN-5000-epochs-0.001-LR-STAGE2")
+    model = keras.models.load_model("model/"
+                                    "BasicCNN-5000-epochs-0.001-LR-STAGE2")
 
     hm_epochs = 5000
 
@@ -103,9 +107,9 @@ def main():
                     13: [],
                 }
 
-                for file in all_files[current:current+increment]:
+                for f in all_files[current:current+increment]:
                     try:
-                        full_path = os.path.join(train_data_dir, file)
+                        full_path = os.path.join(train_data_dir, f)
                         data = np.load(full_path)
                         data = list(data)
                         for d in data:
@@ -136,13 +140,24 @@ def main():
                 test_size = 100
                 batch_size = 128  # 128 best so far.
 
-                x_train = np.array([i[1] for i in train_data[:-test_size]])\
-                    .reshape(-1, 176, 200, 1)
-                y_train = np.array([i[0] for i in train_data[:-test_size]])
+                if EXPANDED_TRAINING_MODEL:
+                    x_train = np.array([i[1] for i in train_data])\
+                        .reshape(-1, 176, 200, 1)
+                    y_train = np.array([i[0] for i in train_data])
 
-                x_test = np.array([i[1] for i in train_data[-test_size:]])\
-                    .reshape(-1, 176, 200, 1)
-                y_test = np.array([i[0] for i in train_data[-test_size:]])
+                    x_test = np.load("train_data_14_choices/out_of_sample/"
+                                     "x_oos.npy")
+                    y_test = np.load("train_data_14_choices/out_of_sample/"
+                                     "y_oos.npy")
+                else:
+                    x_train = np.array([i[1] for i in
+                                        train_data[:-test_size]])\
+                                            .reshape(-1, 176, 200, 1)
+                    y_train = np.array([i[0] for i in train_data[:-test_size]])
+
+                    x_test = np.array([i[1] for i in train_data[-test_size:]])\
+                        .reshape(-1, 176, 200, 1)
+                    y_test = np.array([i[0] for i in train_data[-test_size:]])
 
                 model.fit(x_train, y_train,
                           batch_size=batch_size,
@@ -151,9 +166,10 @@ def main():
                           epochs=1,
                           verbose=1, callbacks=[tensorboard])
 
-                model.save("BasicCNN-5000-epochs-0.001-LR-STAGE2")
+                model.save("models/BasicCNN-5000-epochs-0.001-LR-STAGE2")
             except Exception as e:
                 print(e)
+
             current += increment
             if current > maximum:
                 not_maximum = False

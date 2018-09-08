@@ -5,7 +5,9 @@ import time
 
 import cv2
 # import keras
+# import keras.backend.tensorflow_backend as backend
 import numpy as np
+# import tensorflow as tf
 
 import sc2
 from sc2 import run_game, maps, Race, Difficulty, position, Result
@@ -15,6 +17,13 @@ from sc2.constants import *
 
 os.environ["SC2PATH"] = "D:/Program Files (x86)/Blizzard Games/StarCraft II"
 HEADLESS = False
+
+
+def get_session(gpu_fraction=0.3):
+    """Assume that you have 6GB of GPU memory and want to allocate ~2GB"""
+    gpu_options = tf.GPUOptions(per_process_gpu_memory_fraction=gpu_fraction)
+    return tf.Session(config=tf.ConfigProto(gpu_options=gpu_options))
+backend.set_session(get_session())
 
 
 # 165 iterations per minute.
@@ -41,6 +50,22 @@ class CleverBot(sc2.BotAI):
             12: self.expand,
             13: self.do_nothing,
         }
+        self.the_choices = {
+            0: "build_scout",
+            1: "build_zealot",
+            2: "build_gateway",
+            3: "build_voidray",
+            4: "build_stalker",
+            5: "build_worker",
+            6: "build_assimilator",
+            7: "build_stargate",
+            8: "build_pylon",
+            9: "defend_nexus",
+            10: "attack_known_enemy_unit",
+            11: "attack_known_enemy_structure",
+            12: "expand",
+            13: "do_nothing",
+        }
 
         self.use_model = use_model
         self.save_train_data = save_train_data
@@ -58,9 +83,8 @@ class CleverBot(sc2.BotAI):
 
         if self.use_model:
             print("USING MODEL!")
-            self.model = keras.models.load_model(
-                "models/BasicCNN-30-epochs-0.0001-LR-4.2"
-            )
+            self.model = keras.models.load_model("models/STAGE2V2")
+
 
     def on_end(self, game_result):
         print("--- on_end called ---")
@@ -97,6 +121,9 @@ class CleverBot(sc2.BotAI):
 
         go_to = position.Point2(position.Pointlike((x, y)))
         return go_to
+
+    def get_good_pylon_pos(self, pylon):
+        return pylon.position.towards(self.game_info.map_center, 5)
 
     def find_target(self, state):
         if self.known_enemy_units.amount > 0:
@@ -260,10 +287,23 @@ class CleverBot(sc2.BotAI):
     async def do_something(self):
         if self.time_ > self.do_something_after:
             if self.use_model:
+                worker_weight = 1.4
+                zealot_weight = 1
+                voidray_weight = 1
+                stalker_weight = 1
+                pylon_weight = 1.3
+                stargate_weight = 1
+                gateway_weight = 1
+                assimilator_weight = 2
+
                 prediction = self.model.predict(
-                    [self.flipped.reshape([-1, 176, 200, 3])]
+                    [self.flipped.reshape([-1, 176, 200, 1])]
                 )
-                choice = np.argmax(prediction[0])
+                weights = [1, zealot_weight, gateway_weight, voidray_weight,
+                           stalker_weight, worker_weight, assimilator_weight,
+                           stargate_weight, pylon_weight, 1, 1, 1, 1, 1]
+                weighted_prediction = prediction[0] * weights
+                choice = np.argmax(weighted_prediction)
             else:
                 worker_weight = 8
                 zealot_weight = 3
@@ -289,7 +329,7 @@ class CleverBot(sc2.BotAI):
                                   1 * [13])
                 choice = random.choice(choice_weights)
             try:
-                print(f"Make a choice #{choice}.")
+                print(f"Make a choice #{the_choices[choice]}.")
                 await self.choices[choice]()
             except Exception as e:
                 print(str(e))
@@ -315,13 +355,15 @@ class CleverBot(sc2.BotAI):
     async def build_gateway(self):
         pylon = self.units(PYLON).ready.random
         if self.can_afford(GATEWAY) and not self.already_pending(GATEWAY):
-            await self.build(GATEWAY, near=pylon)
+            await self.build(GATEWAY, near=self.get_good_pylon_pos(pylon))
 
     async def build_voidray(self):
         stargates = self.units(STARGATE).ready
         if stargates.exists:
             if self.can_afford(VOIDRAY) and self.supply_left >= 4:
                 await self.do(random.choice(stargates).train(VOIDRAY))
+        else:
+            await self.build_stargate()
 
     async def build_stalker(self):
         pylon = self.units(PYLON).ready.random
@@ -336,7 +378,8 @@ class CleverBot(sc2.BotAI):
             if self.units(GATEWAY).ready.exists:
                 if self.can_afford(CYBERNETICSCORE) and \
                    not self.already_pending(CYBERNETICSCORE):
-                    await self.build(CYBERNETICSCORE, near=pylon)
+                    await self.build(CYBERNETICSCORE,
+                                     near=self.get_good_pylon_pos(pylon))
 
     async def build_worker(self):
         nexuses = self.units(NEXUS).ready
@@ -358,12 +401,21 @@ class CleverBot(sc2.BotAI):
                     await self.do(worker.build(ASSIMILATOR, vaspene))
 
     async def build_stargate(self):
+        cybernetics_cores = self.units(CYBERNETICSCORE)
         if self.units(PYLON).ready.exists:
             pylon = self.units(PYLON).ready.random
             if self.units(CYBERNETICSCORE).ready.exists:
-                if self.can_afford(STARGATE) and \
+                if self.can_afford(STARGATE) and\
                    not self.already_pending(STARGATE):
-                    await self.build(STARGATE, near=pylon)
+                    await self.build(STARGATE,
+                                     near=self.get_good_pylon_pos(pylon))
+
+            if not cybernetics_cores.exists:
+                if self.units(GATEWAY).ready.exists:
+                    if self.can_afford(CYBERNETICSCORE) and\
+                       not self.already_pending(CYBERNETICSCORE):
+                        await self.build(CYBERNETICSCORE,
+                                         near=self.get_good_pylon_pos(pylon))
 
     async def build_pylon(self):
             nexuses = self.units(NEXUS).ready
@@ -423,7 +475,7 @@ class CleverBot(sc2.BotAI):
 def test_model():
     for i in range(100):
         run_game(maps.get("AbyssalReefLE"), [
-                     Bot(Race.Protoss, CleverBot(use_model=True)),
+                     Bot(Race.Protoss, CleverBot(use_model=True, title=1)),
                      Computer(Race.Terran, Difficulty.Medium),
                  ], realtime=False)
 

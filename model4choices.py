@@ -133,7 +133,7 @@ def main():
                       validation_data=(x_test, y_test),
                       shuffle=True, verbose=1, callbacks=[tensorboard])
 
-            model.save(f"BasicCNN-{hm_epochs}-epochs-"
+            model.save(f"models/BasicCNN-{hm_epochs}-epochs-"
                        f"{learning_rate}-LR-STAGE1")
             current += increment
             if current > maximum:
