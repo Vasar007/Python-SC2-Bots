@@ -102,3 +102,9 @@ venv.bak/
 
 # mypy
 .mypy_cache/
+
+# User defined block
+.vscode/
+models/
+train_data_4_choices/
+train_data_14_choices/
